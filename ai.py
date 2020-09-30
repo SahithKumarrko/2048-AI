@@ -1,6 +1,7 @@
 import math
 from datetime import datetime
 from colorama import Fore as colors,init
+import random
 init()
 minSearchTime = 0.3
 
@@ -26,6 +27,7 @@ class Grid:
         self.startTiles = 1
         self.cells = []
         self.indexes = []
+        self.playerTurn = True
         for x in range(self.size):
             self.cells.append([])
             for y in range(self.size):
@@ -41,6 +43,7 @@ class Grid:
                     3: { "x": -1, "y": 0 }   # left
                 }
     
+
     def eachCell(self,callback):
         for x in range(self.size):
             for y in range(self.size):
@@ -74,10 +77,14 @@ class Grid:
         self.cells[tile.x][tile.y] = tile
     
     def removeTile(self,tile):
-        self.cells[tile.x][tile.y] = None
+        if type(tile)==dict:
+            self.cells[tile["x"]][tile["y"]] = None
+        else:
+            self.cells[tile.x][tile.y] = None
 
     def clone(self):
         newGrid = Grid(self.size)
+        newGrid.playerTurn = self.playerTurn
         for x in range(self.size):
             for y in range(self.size):
                 if self.cells[x][y]!=None:
@@ -91,6 +98,18 @@ class Grid:
     def cellAvailable(self,cell):
         return not(self.cellOccupied(cell))
 
+    
+    def randomAvailableCell(self):
+        cells = self.availableCells()
+        if len(cells)!=0:
+            return cells[math.floor(random.random() * len(cells))]
+
+    def addRandomTile(self):
+        if self.cellsAvailable():
+            value = 2 if random.random() < 0.9 else 4
+            tile = Tile(self.randomAvailableCell(),value)
+            self.insertTile(tile)
+    
     def moveTile(self,tile,cell):
         self.cells[tile.x][tile.y] = None
         self.cells[cell["x"]][cell["y"]] = tile
@@ -239,6 +258,10 @@ class Grid:
                 tile.savePosition()
         self.eachCell(prepare)
 
+    def computerMove(self):
+        self.addRandomTile()
+        self.playerTurn = True
+    
     def move(self,direction):
 
         cell = None
@@ -277,6 +300,7 @@ class Grid:
                         self.moveTile(tile, position["farthest"])
                     if not self.positionsEqual(cell, tile):
                         moved = True
+                        self.playerTurn = False
         return {"moved": moved, "score": score, "won": won}
 
 
@@ -297,29 +321,66 @@ class AI:
         bestScore = 0
         bestMove = -1
         result = 0
-        bestScore = alpha
-        for direction in range(4):
-            newGrid = self.grid.clone()
-            if newGrid.move(direction)["moved"]:
+        
+        if (self.grid.playerTurn):
+            bestScore = alpha
+            for direction in range(4):
+                newGrid = self.grid.clone()
+                if newGrid.move(direction)["moved"]:
+                    positions += 1
+                    if newGrid.isWin():
+                        print("Winning state reached")
+                        return { "move": direction, "score": 10000, "positions": positions, "cutoffs": cutoffs }
+                    newAI = AI(newGrid)
+                    if depth==0:
+                        result = { "move": direction, "score": newAI.eval() }
+                    else:
+                        result = newAI.search(depth-1, bestScore, beta, positions, cutoffs)
+                        if result["score"] > 9900:
+                            result["score"] -= 1
+                        positions = result["positions"]
+                        cutoffs = result["cutoffs"]
+                    if result["score"] > bestScore:
+                        bestScore = result["score"]
+                        bestMove = direction
+                    if bestScore > beta:
+                        cutoffs += 1
+                        return { "move": bestMove, "score": beta, "positions": positions, "cutoffs": cutoffs }
+        else:
+            bestScore = beta
+            candidates = []
+            cells = self.grid.availableCells()
+            scores = {2:[],4:[]}
+            for value in scores.keys():
+                for ind,i in enumerate(cells):
+                    scores[value].append(None)
+                    cell = cells[ind]
+                    tile= Tile(cell,int(value))
+                    self.grid.insertTile(tile)
+                    scores[value][ind] = -self.grid.smoothness() + self.grid.islands()
+                    self.grid.removeTile(cell)
+            maxScore = max(max(scores[2],default=0),max(scores[4],default=0))
+            for value in scores:
+                for i in range(len(scores[value])):
+                    candidates.append({"position":cells[i],"value":int(value)})
+            
+            for i in range(len(candidates)):
+                position = candidates[i]["position"]
+                value = candidates[i]["value"]
+                newGrid = self.grid.clone()
+                tile = Tile(position,value)
+                newGrid.insertTile(tile)
+                newGrid.playerTurn = True
                 positions += 1
-                if newGrid.isWin():
-                    print("Winning state reached")
-                    return { "move": direction, "score": 10000, "positions": positions, "cutoffs": cutoffs }
                 newAI = AI(newGrid)
-                if depth==0:
-                    result = { "move": direction, "score": newAI.eval() }
-                else:
-                    result = newAI.search(depth-1, bestScore, beta, positions, cutoffs)
-                    if result["score"] > 9900:
-                        result["score"] -= 1
-                    positions = result["positions"]
-                    cutoffs = result["cutoffs"]
-                if result["score"] > bestScore:
+                result = newAI.search(depth,alpha,bestScore,positions,cutoffs)
+                positions = result["positions"]
+                cutoffs = result["cutoffs"]
+                if result["score"] < bestScore:
                     bestScore = result["score"]
-                    bestMove = direction
-                if bestScore > beta:
+                if bestScore < alpha:
                     cutoffs += 1
-                    return { "move": bestMove, "score": beta, "positions": positions, "cutoffs": cutoffs }
+                    return {"move":None,"score":alpha,"positions":positions,"cutoffs":cutoffs}
         return { "move": bestMove, "score": bestScore, "positions": positions, "cutoffs": cutoffs }
     
     def iterativeDeep(self):
@@ -352,10 +413,10 @@ class AI:
 
 grid = Grid(4)
 ai = AI(grid)
-# cells = [[4,0,2,8],[0,0,8,64],[0,8,16,32],[0,8,128,4]]
+cells = [[4,0,2,8],[0,0,8,64],[0,8,16,32],[0,8,128,4]]
 # cells = [[0,0,2,8],[0,0,16,8],[2,2,4,32],[0,0,0,8]]
 # cells = [[2,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,2]]
-cells= [[0,0,2,4],[0,0,0,64],[0,4,2,16],[16,2,16,4]]
+# cells= [[0,0,2,4],[0,0,0,64],[0,4,2,16],[16,2,16,4]]
 for i in range(4):
     for j in range(4):
         if cells[i][j]!=0:
@@ -370,7 +431,9 @@ for i in range(4):
 best = ai.getBest()
 print("\n\n")
 # print("Best move : ",colors.RED + "Testing" + colors.RESET)
-# moved = grid.move(best["move"])
+moved = grid.move(best["move"])
+print(best)
+print(moved)
 move = best["move"]
 if move==0:
     print("Best move : ",colors.RED + ai.translate(move).upper() + colors.RESET,end="\r")
